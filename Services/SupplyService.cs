@@ -137,6 +137,108 @@ namespace MilitarySupply.Services
             }, update ? "재고 조정" : "품목 등록", $"{item.Name} · 가용 {item.Quantity}개");
         }
 
+        public void Issue(string soldier, string item, int quantity, string serial)
+        {
+            Commit(d =>
+            {
+                if (quantity <= 0)
+                    throw new InvalidOperationException("지급 수량은 1 이상이어야 합니다.");
+
+                var index = d.Items.FindIndex(x => x.Id == item);
+                if (index < 0 || !d.Soldiers.Any(x => x.Id == soldier))
+                    throw new InvalidOperationException("병사와 품목을 선택하세요.");
+
+                var stock = d.Items[index];
+                if (stock.Quantity < quantity)
+                    throw new InvalidOperationException("가용 재고가 부족합니다.");
+
+                d.Items[index] = stock with { Quantity = stock.Quantity - quantity };
+                d.Issues.Insert(0, new(Guid.NewGuid().ToString("N"), soldier, item, quantity, serial.Trim(), DateTime.Now, null));
+            }, "장비 지급", $"{soldier} / {item} / {quantity}개");
+        }
+
+        public void Return(string id)
+        {
+            Commit(d =>
+            {
+                var ix = d.Issues.FindIndex(x => x.Id == id);
+                if (ix < 0 || d.Issues[ix].ReturnedAt != null)
+                    throw new InvalidOperationException("지급 중인 이력을 선택하세요.");
+
+                var issue = d.Issues[ix];
+                var si = d.Items.FindIndex(x => x.Id == issue.ItemId);
+                d.Items[si] = d.Items[si] with { Quantity = checked(d.Items[si].Quantity + issue.Quantity) };
+                d.Issues[ix] = issue with { ReturnedAt = DateTime.Now };
+            }, "장비 반납", id);
+        }
+
+        // 드래그로 구성한 장비를 한 번에 확정한다 (재고는 예약, 인도는 대기)
+        public void ConfirmLoadout(string soldier, IReadOnlyList<IssueDraft> drafts)
+        {
+            if (drafts.Count == 0)
+                throw new InvalidOperationException("드래그하여 지급할 장비를 먼저 구성하세요.");
+
+            Commit(d =>
+            {
+                if (!d.Soldiers.Any(x => x.Id == soldier))
+                    throw new InvalidOperationException("병사를 선택하세요.");
+
+                var slots = new HashSet<string>();
+                foreach (var draft in drafts)
+                {
+                    var ix = d.Items.FindIndex(x => x.Id == draft.ItemId);
+                    if (ix < 0)
+                        throw new InvalidOperationException("존재하지 않는 품목입니다.");
+
+                    var item = d.Items[ix];
+                    var slot = EquipmentCatalog.SlotFor(item);
+                    if (slot == null || !slots.Add(slot))
+                        throw new InvalidOperationException("같은 장착 위치의 품목을 중복 확정할 수 없습니다.");
+
+                    if (d.Issues.Any(x => x.SoldierId == soldier
+                                       && x.ReturnedAt == null
+                                       && EquipmentCatalog.SlotFor(d.Items.First(i => i.Id == x.ItemId)) == slot))
+                        throw new InvalidOperationException($"{EquipmentCatalog.Label(slot)}에 이미 확정 또는 지급된 장비가 있습니다. 반납/취소 후 진행하세요.");
+
+                    if (item.Quantity < 1)
+                        throw new InvalidOperationException($"{item.Name}의 가용재고가 부족합니다.");
+
+                    d.Items[ix] = item with { Quantity = item.Quantity - 1 };
+                    d.Issues.Insert(0, new(Guid.NewGuid().ToString("N"), soldier, item.Id, 1, draft.Serial.Trim(), DateTime.Now, null, true));
+                }
+            }, "지급 확정", $"{soldier} / {drafts.Count}종 재고 예약 · 인도 대기");
+        }
+
+        public void CompleteDelivery(string soldier)
+        {
+            Commit(d =>
+            {
+                var pending = d.Issues
+                    .Where(x => x.SoldierId == soldier && x.ReturnedAt == null && x.AwaitingDelivery)
+                    .ToList();
+                if (pending.Count == 0)
+                    throw new InvalidOperationException("선택 병사에게 지급 확정된 장비가 없습니다.");
+
+                foreach (var x in pending)
+                {
+                    var ix = d.Issues.FindIndex(i => i.Id == x.Id);
+                    d.Issues[ix] = x with { AwaitingDelivery = false };
+                }
+            }, "지급 완료", $"{soldier} / 확정 장비 인도 완료");
+        }
+
+        // 필수 장비를 모두 지급 완료한 병사의 비율(%)
+        public double Rate =>
+            Data.Soldiers.Count == 0 || !Data.Items.Any(x => x.Required)
+                ? 0
+                : 100.0 * Data.Soldiers.Count(s => Data.Items
+                      .Where(x => x.Required)
+                      .All(i => Data.Issues.Any(x => x.SoldierId == s.Id
+                                                  && x.ItemId == i.Id
+                                                  && x.ReturnedAt == null
+                                                  && !x.AwaitingDelivery)))
+                  / Data.Soldiers.Count;
+
         public static SupplyData Demo()
         {
             var d = new SupplyData
