@@ -227,6 +227,35 @@ namespace MilitarySupply.Services
             }, "지급 완료", $"{soldier} / 확정 장비 인도 완료");
         }
 
+        public void Request(string item, int quantity, string reason)
+        {
+            Commit(d => d.Requests.Insert(0, new(Guid.NewGuid().ToString("N"), item, quantity, reason.Trim(), "승인 대기", DateTime.Now)),
+                "보급 요청", $"{item} / {quantity}개");
+        }
+
+        // 승인 대기 → 승인 완료 → 입고 완료 (입고될 때 재고가 늘어남)
+        public void Advance(string id)
+        {
+            Commit(d =>
+            {
+                var ix = d.Requests.FindIndex(x => x.Id == id);
+                if (ix < 0)
+                    throw new InvalidOperationException("요청을 선택하세요.");
+
+                var r = d.Requests[ix];
+                if (r.Status == "입고 완료")
+                    throw new InvalidOperationException("이미 입고 완료된 요청입니다.");
+
+                if (r.Status == "승인 완료")
+                {
+                    var si = d.Items.FindIndex(x => x.Id == r.ItemId);
+                    d.Items[si] = d.Items[si] with { Quantity = checked(d.Items[si].Quantity + r.Quantity) };
+                }
+
+                d.Requests[ix] = r with { Status = r.Status == "승인 대기" ? "승인 완료" : "입고 완료" };
+            }, "보급 처리", id);
+        }
+
         // 필수 장비를 모두 지급 완료한 병사의 비율(%)
         public double Rate =>
             Data.Soldiers.Count == 0 || !Data.Items.Any(x => x.Required)
