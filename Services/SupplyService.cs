@@ -1,0 +1,323 @@
+using System.IO;
+using System.Text.Json;
+using MilitarySupply.Models;
+
+namespace MilitarySupply.Services
+{
+    public sealed class SupplyService
+    {
+        public SupplyData Data { get; private set; }
+        public string FilePath { get; }
+
+        private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+
+        public SupplyService(string path)
+        {
+            FilePath = path;
+
+            // 저장 파일이 있으면 불러오고, 없으면 데모 데이터로 시작
+            Data = File.Exists(path)
+                ? JsonSerializer.Deserialize<SupplyData>(File.ReadAllText(path))
+                    ?? throw new InvalidDataException("저장 파일이 비어 있습니다.")
+                : Demo();
+            Validate(Data);
+        }
+
+        public static void Validate(SupplyData d)
+        {
+            if (d.Version != 1)
+                throw new InvalidDataException("지원하지 않는 데이터 버전입니다.");
+
+            if (d.Soldiers == null || d.Items == null || d.Issues == null || d.Requests == null || d.History == null)
+                throw new InvalidDataException("필수 데이터 목록이 누락되었습니다.");
+
+            static void Unique(IEnumerable<string> ids, string label)
+            {
+                var list = ids.ToList();
+                if (list.Any(string.IsNullOrWhiteSpace) || list.Distinct(StringComparer.OrdinalIgnoreCase).Count() != list.Count)
+                    throw new InvalidDataException($"{label}: 빈 ID 또는 중복 ID가 있습니다.");
+            }
+
+            Unique(d.Soldiers.Select(x => x.Id), "병사");
+            Unique(d.Items.Select(x => x.Id), "재고");
+            Unique(d.Issues.Select(x => x.Id), "지급");
+            Unique(d.Requests.Select(x => x.Id), "요청");
+
+            if (d.Soldiers.Any(x => string.IsNullOrWhiteSpace(x.Name)
+                                 || string.IsNullOrWhiteSpace(x.Rank)
+                                 || string.IsNullOrWhiteSpace(x.Unit)))
+                throw new InvalidDataException("병사 이름, 계급, 소속은 필수입니다.");
+
+            if (d.Items.Any(x => string.IsNullOrWhiteSpace(x.Name)
+                              || string.IsNullOrWhiteSpace(x.Category)
+                              || x.Quantity < 0
+                              || x.Minimum < 0))
+                throw new InvalidDataException("품목명·구분은 필수이며 재고와 기준은 0 이상이어야 합니다.");
+
+            if (d.Issues.Any(x => !d.Soldiers.Any(s => s.Id == x.SoldierId)
+                               || !d.Items.Any(i => i.Id == x.ItemId)
+                               || x.Quantity <= 0
+                               || x.Date == default
+                               || x.ReturnedAt < x.Date
+                               || (!string.IsNullOrEmpty(x.Serial) && x.Quantity != 1)))
+                throw new InvalidDataException("지급 이력의 병사·품목·수량·날짜·일련번호를 확인하세요.");
+
+            var serials = d.Issues
+                .Where(x => x.ReturnedAt == null && !string.IsNullOrEmpty(x.Serial))
+                .Select(x => x.Serial);
+            if (serials.Distinct(StringComparer.OrdinalIgnoreCase).Count() != serials.Count())
+                throw new InvalidDataException("지급 중인 일련번호가 중복됩니다.");
+
+            if (d.Requests.Any(x => !d.Items.Any(i => i.Id == x.ItemId)
+                                 || x.Quantity <= 0
+                                 || string.IsNullOrWhiteSpace(x.Reason)
+                                 || x.Date == default
+                                 || !new[] { "승인 대기", "승인 완료", "입고 완료" }.Contains(x.Status)))
+                throw new InvalidDataException("보급 요청의 품목·수량·사유·상태·날짜를 확인하세요.");
+        }
+
+        // 복사본을 고치고, 검사를 통과하면 저장한 뒤 바꿔 끼운다
+        private void Commit(Action<SupplyData> change, string action, string detail)
+        {
+            var next = JsonSerializer.Deserialize<SupplyData>(JsonSerializer.Serialize(Data))!;
+            change(next);
+            next.History.Insert(0, new(DateTime.Now, action, detail));
+            Validate(next);
+            Persist(next);
+            Data = next;
+        }
+
+        private void Persist(SupplyData next)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(FilePath))!);
+
+            // 임시 파일에 먼저 쓰고 바꿔치기 (기존 파일은 .bak으로 남김)
+            var temp = FilePath + ".tmp";
+            File.WriteAllText(temp, JsonSerializer.Serialize(next, JsonOptions));
+
+            if (File.Exists(FilePath))
+                File.Replace(temp, FilePath, FilePath + ".bak");
+            else
+                File.Move(temp, FilePath);
+        }
+
+        public void Save() => Persist(Data);
+
+        // XLSX에서 읽은 데이터로 전체를 바꾼다
+        public void Replace(SupplyData data)
+        {
+            Validate(data);
+            var next = JsonSerializer.Deserialize<SupplyData>(JsonSerializer.Serialize(data))!;
+            next.History.Insert(0, new(DateTime.Now, "XLSX 가져오기", "전체 데이터 교체"));
+            Persist(next);
+            Data = next;
+        }
+
+        public void SaveSoldier(Soldier s, bool update)
+        {
+            Commit(d =>
+            {
+                var index = d.Soldiers.FindIndex(x => x.Id == s.Id);
+                if (update && index < 0)
+                    throw new InvalidOperationException("수정할 병사를 선택하세요.");
+                if (!update && index >= 0)
+                    throw new InvalidOperationException("이미 등록된 군번입니다.");
+
+                if (update)
+                    d.Soldiers[index] = s;
+                else
+                    d.Soldiers.Add(s);
+            }, update ? "병사 수정" : "병사 등록", s.Display);
+        }
+
+        public void SaveItem(StockItem item, bool update)
+        {
+            Commit(d =>
+            {
+                var index = d.Items.FindIndex(x => x.Id == item.Id);
+                if (update && index < 0)
+                    throw new InvalidOperationException("수정할 품목을 선택하세요.");
+                if (!update && index >= 0)
+                    throw new InvalidOperationException("이미 등록된 품목 코드입니다.");
+
+                if (update)
+                    d.Items[index] = item;
+                else
+                    d.Items.Add(item);
+            }, update ? "재고 조정" : "품목 등록", $"{item.Name} · 가용 {item.Quantity}개");
+        }
+
+        public void Issue(string soldier, string item, int quantity, string serial)
+        {
+            Commit(d =>
+            {
+                if (quantity <= 0)
+                    throw new InvalidOperationException("지급 수량은 1 이상이어야 합니다.");
+
+                var index = d.Items.FindIndex(x => x.Id == item);
+                if (index < 0 || !d.Soldiers.Any(x => x.Id == soldier))
+                    throw new InvalidOperationException("병사와 품목을 선택하세요.");
+
+                var stock = d.Items[index];
+                if (stock.Quantity < quantity)
+                    throw new InvalidOperationException("가용 재고가 부족합니다.");
+
+                d.Items[index] = stock with { Quantity = stock.Quantity - quantity };
+                d.Issues.Insert(0, new(Guid.NewGuid().ToString("N"), soldier, item, quantity, serial.Trim(), DateTime.Now, null));
+            }, "장비 지급", $"{soldier} / {item} / {quantity}개");
+        }
+
+        public void Return(string id)
+        {
+            Commit(d =>
+            {
+                var ix = d.Issues.FindIndex(x => x.Id == id);
+                if (ix < 0 || d.Issues[ix].ReturnedAt != null)
+                    throw new InvalidOperationException("지급 중인 이력을 선택하세요.");
+
+                var issue = d.Issues[ix];
+                var si = d.Items.FindIndex(x => x.Id == issue.ItemId);
+                d.Items[si] = d.Items[si] with { Quantity = checked(d.Items[si].Quantity + issue.Quantity) };
+                d.Issues[ix] = issue with { ReturnedAt = DateTime.Now };
+            }, "장비 반납", id);
+        }
+
+        // 드래그로 구성한 장비를 한 번에 확정한다 (재고는 예약, 인도는 대기)
+        public void ConfirmLoadout(string soldier, IReadOnlyList<IssueDraft> drafts)
+        {
+            if (drafts.Count == 0)
+                throw new InvalidOperationException("드래그하여 지급할 장비를 먼저 구성하세요.");
+
+            Commit(d =>
+            {
+                if (!d.Soldiers.Any(x => x.Id == soldier))
+                    throw new InvalidOperationException("병사를 선택하세요.");
+
+                var slots = new HashSet<string>();
+                foreach (var draft in drafts)
+                {
+                    var ix = d.Items.FindIndex(x => x.Id == draft.ItemId);
+                    if (ix < 0)
+                        throw new InvalidOperationException("존재하지 않는 품목입니다.");
+
+                    var item = d.Items[ix];
+                    var slot = EquipmentCatalog.SlotFor(item);
+                    if (slot == null || !slots.Add(slot))
+                        throw new InvalidOperationException("같은 장착 위치의 품목을 중복 확정할 수 없습니다.");
+
+                    if (d.Issues.Any(x => x.SoldierId == soldier
+                                       && x.ReturnedAt == null
+                                       && EquipmentCatalog.SlotFor(d.Items.First(i => i.Id == x.ItemId)) == slot))
+                        throw new InvalidOperationException($"{EquipmentCatalog.Label(slot)}에 이미 확정 또는 지급된 장비가 있습니다. 반납/취소 후 진행하세요.");
+
+                    if (item.Quantity < 1)
+                        throw new InvalidOperationException($"{item.Name}의 가용재고가 부족합니다.");
+
+                    d.Items[ix] = item with { Quantity = item.Quantity - 1 };
+                    d.Issues.Insert(0, new(Guid.NewGuid().ToString("N"), soldier, item.Id, 1, draft.Serial.Trim(), DateTime.Now, null, true));
+                }
+            }, "지급 확정", $"{soldier} / {drafts.Count}종 재고 예약 · 인도 대기");
+        }
+
+        public void CompleteDelivery(string soldier)
+        {
+            Commit(d =>
+            {
+                var pending = d.Issues
+                    .Where(x => x.SoldierId == soldier && x.ReturnedAt == null && x.AwaitingDelivery)
+                    .ToList();
+                if (pending.Count == 0)
+                    throw new InvalidOperationException("선택 병사에게 지급 확정된 장비가 없습니다.");
+
+                foreach (var x in pending)
+                {
+                    var ix = d.Issues.FindIndex(i => i.Id == x.Id);
+                    d.Issues[ix] = x with { AwaitingDelivery = false };
+                }
+            }, "지급 완료", $"{soldier} / 확정 장비 인도 완료");
+        }
+
+        public void Request(string item, int quantity, string reason)
+        {
+            Commit(d => d.Requests.Insert(0, new(Guid.NewGuid().ToString("N"), item, quantity, reason.Trim(), "승인 대기", DateTime.Now)),
+                "보급 요청", $"{item} / {quantity}개");
+        }
+
+        // 승인 대기 → 승인 완료 → 입고 완료 (입고될 때 재고가 늘어남)
+        public void Advance(string id)
+        {
+            Commit(d =>
+            {
+                var ix = d.Requests.FindIndex(x => x.Id == id);
+                if (ix < 0)
+                    throw new InvalidOperationException("요청을 선택하세요.");
+
+                var r = d.Requests[ix];
+                if (r.Status == "입고 완료")
+                    throw new InvalidOperationException("이미 입고 완료된 요청입니다.");
+
+                if (r.Status == "승인 완료")
+                {
+                    var si = d.Items.FindIndex(x => x.Id == r.ItemId);
+                    d.Items[si] = d.Items[si] with { Quantity = checked(d.Items[si].Quantity + r.Quantity) };
+                }
+
+                d.Requests[ix] = r with { Status = r.Status == "승인 대기" ? "승인 완료" : "입고 완료" };
+            }, "보급 처리", id);
+        }
+
+        // 필수 장비를 모두 지급 완료한 병사의 비율(%)
+        public double Rate =>
+            Data.Soldiers.Count == 0 || !Data.Items.Any(x => x.Required)
+                ? 0
+                : 100.0 * Data.Soldiers.Count(s => Data.Items
+                      .Where(x => x.Required)
+                      .All(i => Data.Issues.Any(x => x.SoldierId == s.Id
+                                                  && x.ItemId == i.Id
+                                                  && x.ReturnedAt == null
+                                                  && !x.AwaitingDelivery)))
+                  / Data.Soldiers.Count;
+
+        public static SupplyData Demo()
+        {
+            var d = new SupplyData
+            {
+                Soldiers =
+                [
+                    new("26-10001", "김민준", "일병", "1소대"),
+                    new("26-10002", "박지훈", "상병", "1소대"),
+                    new("26-10003", "이서준", "상병", "2소대"),
+                    new("26-10004", "최도윤", "일병", "2소대"),
+                    new("26-10005", "정시우", "이병", "3소대"),
+                    new("26-10006", "강하준", "병장", "3소대")
+                ],
+                Items =
+                [
+                    new("EQ-001", "방탄헬멧", "개인장구", 134, 30, true),
+                    new("EQ-002", "방탄복", "개인장구", 48, 30, true),
+                    new("EQ-003", "전투조끼", "개인장구", 57, 30, true),
+                    new("EQ-004", "탄알집", "탄약/부속", 24, 30, false),
+                    new("EQ-005", "전투화", "피복류", 265, 50, true),
+                    new("EQ-006", "군장", "개인장구", 28, 30, true),
+                    new("EQ-007", "K2", "무기", 27, 30, false),
+                    new("EQ-008", "K2C1", "무기", 19, 20, false)
+                ]
+            };
+
+            // 앞의 5명은 필수 장비를 받은 상태로 시작
+            foreach (var s in d.Soldiers.Take(5))
+            {
+                foreach (var i in d.Items.Where(x => x.Required))
+                    d.Issues.Add(new(Guid.NewGuid().ToString("N"), s.Id, i.Id, 1, "", DateTime.Today.AddDays(-2), null));
+            }
+
+            d.Requests =
+            [
+                new("REQ-DEMO-01", "EQ-004", 30, "훈련 대비 예비 수량 확보", "승인 대기", DateTime.Today),
+                new("REQ-DEMO-02", "EQ-006", 10, "신규 전입 인원 지급", "승인 완료", DateTime.Today.AddDays(-1))
+            ];
+            d.History.Add(new(DateTime.Now, "데모 데이터", "가상 병사 6명 · 실제 군 정보 아님"));
+            return d;
+        }
+    }
+}
