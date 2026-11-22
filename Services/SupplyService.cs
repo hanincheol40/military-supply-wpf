@@ -103,6 +103,40 @@ namespace MilitarySupply.Services
 
         public void Save() => Persist(Data);
 
+        public void SaveSoldier(Soldier s, bool update)
+        {
+            Commit(d =>
+            {
+                var index = d.Soldiers.FindIndex(x => x.Id == s.Id);
+                if (update && index < 0)
+                    throw new InvalidOperationException("수정할 병사를 선택하세요.");
+                if (!update && index >= 0)
+                    throw new InvalidOperationException("이미 등록된 군번입니다.");
+
+                if (update)
+                    d.Soldiers[index] = s;
+                else
+                    d.Soldiers.Add(s);
+            }, update ? "병사 수정" : "병사 등록", s.Display);
+        }
+
+        public void SaveItem(StockItem item, bool update)
+        {
+            Commit(d =>
+            {
+                var index = d.Items.FindIndex(x => x.Id == item.Id);
+                if (update && index < 0)
+                    throw new InvalidOperationException("수정할 품목을 선택하세요.");
+                if (!update && index >= 0)
+                    throw new InvalidOperationException("이미 등록된 품목 코드입니다.");
+
+                if (update)
+                    d.Items[index] = item;
+                else
+                    d.Items.Add(item);
+            }, update ? "재고 조정" : "품목 등록", $"{item.Name} · 가용 {item.Quantity}개");
+        }
+
         public static SupplyData Demo()
         {
             var d = new SupplyData
