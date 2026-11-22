@@ -103,6 +103,16 @@ namespace MilitarySupply.Services
 
         public void Save() => Persist(Data);
 
+        // XLSX에서 읽은 데이터로 전체를 바꾼다
+        public void Replace(SupplyData data)
+        {
+            Validate(data);
+            var next = JsonSerializer.Deserialize<SupplyData>(JsonSerializer.Serialize(data))!;
+            next.History.Insert(0, new(DateTime.Now, "XLSX 가져오기", "전체 데이터 교체"));
+            Persist(next);
+            Data = next;
+        }
+
         public void SaveSoldier(Soldier s, bool update)
         {
             Commit(d =>
