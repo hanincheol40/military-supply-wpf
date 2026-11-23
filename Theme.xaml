@@ -1,0 +1,96 @@
+<!--
+  임시 테마 (View 개발용)
+  View가 참조하는 리소스 키만 단순한 값으로 정의했습니다.
+  색상·글꼴·컨트롤 템플릿 등 실제 디자인은 디자인 담당 커밋에서 이 파일을 교체합니다.
+-->
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- 글꼴 (임시: 시스템 글꼴) -->
+    <FontFamily x:Key="PaperlogyRegular">Malgun Gothic</FontFamily>
+
+    <!-- 색상 -->
+    <SolidColorBrush x:Key="Canvas" Color="WhiteSmoke"/>
+    <SolidColorBrush x:Key="Surface" Color="White"/>
+    <SolidColorBrush x:Key="SubtleSurface" Color="WhiteSmoke"/>
+    <SolidColorBrush x:Key="Text" Color="Black"/>
+    <SolidColorBrush x:Key="Muted" Color="DimGray"/>
+    <SolidColorBrush x:Key="Line" Color="LightGray"/>
+    <SolidColorBrush x:Key="Hover" Color="Gainsboro"/>
+    <SolidColorBrush x:Key="Focus" Color="RoyalBlue"/>
+    <SolidColorBrush x:Key="Accent" Color="RoyalBlue"/>
+    <SolidColorBrush x:Key="AccentSubtle" Color="AliceBlue"/>
+    <SolidColorBrush x:Key="AccentText" Color="RoyalBlue"/>
+    <SolidColorBrush x:Key="Success" Color="Green"/>
+    <SolidColorBrush x:Key="Warning" Color="DarkOrange"/>
+    <SolidColorBrush x:Key="WarningSurface" Color="LightYellow"/>
+    <SolidColorBrush x:Key="Danger" Color="Red"/>
+
+    <!-- 장비 지급 미리보기 영역 -->
+    <SolidColorBrush x:Key="PreviewSurface" Color="#333333"/>
+    <SolidColorBrush x:Key="PreviewLine" Color="Gray"/>
+    <SolidColorBrush x:Key="PreviewShadow" Color="#222222"/>
+    <SolidColorBrush x:Key="PreviewZone" Color="Transparent"/>
+    <SolidColorBrush x:Key="PreviewZoneLine" Color="Gray"/>
+    <SolidColorBrush x:Key="PreviewText" Color="White"/>
+
+    <CornerRadius x:Key="ControlRadius">4</CornerRadius>
+    <CornerRadius x:Key="PanelRadius">4</CornerRadius>
+
+    <!-- 기본 스타일 (View에서 BasedOn으로 참조) -->
+    <Style TargetType="TextBlock">
+        <Setter Property="VerticalAlignment" Value="Center"/>
+    </Style>
+    <Style TargetType="ComboBox"/>
+
+    <!-- 공통 영역 -->
+    <Style x:Key="Panel" TargetType="Border">
+        <Setter Property="Background" Value="{StaticResource Surface}"/>
+        <Setter Property="BorderBrush" Value="{StaticResource Line}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="Padding" Value="20"/>
+    </Style>
+    <Style x:Key="SectionTitle" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+        <Setter Property="FontSize" Value="18"/>
+        <Setter Property="FontWeight" Value="SemiBold"/>
+        <Setter Property="Margin" Value="0,0,0,16"/>
+    </Style>
+    <Style x:Key="MutedText" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+        <Setter Property="Foreground" Value="{StaticResource Muted}"/>
+    </Style>
+    <Style x:Key="Primary" TargetType="Button">
+        <Setter Property="FontWeight" Value="Bold"/>
+    </Style>
+
+    <!-- 대시보드 업무 흐름 -->
+    <Style x:Key="FlowStep" TargetType="Border">
+        <Setter Property="BorderBrush" Value="{StaticResource Line}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="Padding" Value="10"/>
+    </Style>
+    <Style x:Key="FlowNumber" TargetType="TextBlock">
+        <Setter Property="Margin" Value="0,0,10,0"/>
+    </Style>
+    <Style x:Key="FlowLabel" TargetType="TextBlock"/>
+    <Style x:Key="FlowArrow" TargetType="Path">
+        <Setter Property="Data" Value="M 0,6 L 16,6 M 10,0 L 16,6 L 10,12"/>
+        <Setter Property="Stroke" Value="{StaticResource Muted}"/>
+        <Setter Property="StrokeThickness" Value="2"/>
+        <Setter Property="HorizontalAlignment" Value="Center"/>
+        <Setter Property="VerticalAlignment" Value="Center"/>
+    </Style>
+
+    <!-- 표 기본 동작: View에서 정의한 열만 표시 -->
+    <Style TargetType="DataGrid">
+        <Setter Property="AutoGenerateColumns" Value="False"/>
+        <Setter Property="IsReadOnly" Value="True"/>
+        <Setter Property="CanUserAddRows" Value="False"/>
+        <Setter Property="HeadersVisibility" Value="Column"/>
+    </Style>
+
+    <!-- 표의 상태 열 -->
+    <DataTemplate x:Key="StatusCell">
+        <TextBlock Text="{Binding Status}"/>
+    </DataTemplate>
+
+</ResourceDictionary>
