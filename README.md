@@ -1,14 +1,14 @@
 # military-supply-wpf
 
 군수품 보급·개인장비 관리 WPF 프로그램입니다.
-LIG The SSEN 임베디드 SW 스쿨 5기 WPF 팀 프로젝트로 만들었습니다. 데이터는 모두 가상입니다.
+LIG The SSEN 임베디드 SW 스쿨 5기 WPF활용 팀 프로젝트로 만들었으며 가상 데이터 기반 프로그램입니다.
 
 ## 기본 사항
 | 구분 | 내용 |
 |---|---|
-| 개발 인원 | 4명. C#을 처음 배웠으며, WPF는 모두 처음 학습 |
-| 개발 언어·화면 기술 | C# 기반 WPF (MVVM) |
-| 저장 | 로컬 JSON 파일, XLSX 가져오기·내보내기 |
+| 개발 인원 | 4명. WPF 실습 project |
+| 개발 언어·화면 기술 | C# 기반 WPF (MVVM 실습) |
+| 저장 | 로컬 JSON 파일, XLSX 가져오기, 내보내기 |
 
 ## 팀원
 | <img src="https://github.com/Hanyangsaja.png" width="80"> | <img src="https://github.com/hanincheol40.png" width="80"> | <img src="https://github.com/se71nny.png" width="80"> | <img src="https://github.com/bluebell0127.png" width="80"> |
