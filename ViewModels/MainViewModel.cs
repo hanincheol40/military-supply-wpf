@@ -97,6 +97,36 @@ namespace MilitarySupply.ViewModels
                     RefreshEquipment();
                 }
             });
+
+            // 저장, XLSX
+            SaveCommand = Command(service.Save, "로컬 저장을 완료했습니다.");
+            ExportCommand = new RelayCommand(() => Run(() =>
+            {
+                var path = dialogs.SaveWorkbook();
+                if (path == null) return;
+
+                WorkbookService.Export(path, service.Data);
+                Status = $"XLSX 내보내기 완료 · {path}";
+            }));
+            ImportCommand = new RelayCommand(() => Run(() =>
+            {
+                var path = dialogs.OpenWorkbook();
+                if (path == null) return;
+
+                var data = WorkbookService.Import(path);
+                if (!dialogs.ConfirmImport(path)) return;
+
+                service.Replace(data);
+                SelectedSoldier = null;
+                SelectedItem = null;
+                SelectedIssue = null;
+                SelectedRequest = null;
+                IssueSoldier = null;
+                IssueItem = null;
+                RequestItem = null;
+                Refresh();
+                Status = "XLSX 가져오기 완료 · 기존 데이터는 data.json.bak에 백업되었습니다.";
+            }));
         }
 
         // 실행 → 화면 새로 고침 → 아래 상태 글자 바꾸기
@@ -490,5 +520,9 @@ namespace MilitarySupply.ViewModels
         public ICommand ClearLoadoutCommand { get; }
         public ICommand StageItemCommand { get; }
         public ICommand RemoveDraftCommand { get; }
+
+        public ICommand SaveCommand { get; }
+        public ICommand ExportCommand { get; }
+        public ICommand ImportCommand { get; }
     }
 }
