@@ -61,6 +61,42 @@ namespace MilitarySupply.ViewModels
             }, "보급 요청을 등록했습니다.");
             AdvanceCommand = Command(() => service.Advance(SelectedRequest?.Id ?? ""),
                 "요청을 처리했습니다. 입고 완료 시 재고가 증가합니다.");
+
+            // 장비 구성: 끌어 놓기 → 지급 확정 → 지급 완료
+            ConfirmLoadoutCommand = new RelayCommand(() => Run(() =>
+            {
+                if (IssueSoldier == null)
+                    throw new InvalidOperationException("병사를 먼저 선택하세요.");
+
+                var list = EquipmentSlots.Where(s => s.HasDraft)
+                                         .Select(s => new IssueDraft(s.Draft!.Id, s.Serial))
+                                         .ToList();
+                service.ConfirmLoadout(IssueSoldier.Id, list);
+                drafts.Clear();
+                Refresh();
+                Status = "지급 확정 · 재고 예약 완료. 장비는 반투명 상태이며 실제 인도 후 지급 완료를 누르세요.";
+            }));
+            CompleteDeliveryCommand = Command(() => service.CompleteDelivery(IssueSoldier?.Id ?? ""),
+                "지급 완료 · 장비가 선명한 장착 상태로 변경되었습니다.");
+            ClearLoadoutCommand = new RelayCommand(() =>
+            {
+                drafts.Clear();
+                RefreshEquipment();
+                Status = "구성 중인 장비를 비웠습니다. 확정/완료된 장비는 유지됩니다.";
+            });
+            StageItemCommand = new ParameterCommand(p =>
+            {
+                if (p is StockItem item)
+                    StageItem(item, EquipmentCatalog.SlotFor(item));
+            });
+            RemoveDraftCommand = new ParameterCommand(p =>
+            {
+                if (p is EquipmentSlotViewModel slot)
+                {
+                    drafts.Remove(slot.Key);
+                    RefreshEquipment();
+                }
+            });
         }
 
         // 실행 → 화면 새로 고침 → 아래 상태 글자 바꾸기
@@ -100,6 +136,7 @@ namespace MilitarySupply.ViewModels
         // 데이터가 바뀌면 화면에 묶인 목록과 숫자를 다시 읽게 한다
         public void Refresh()
         {
+            RefreshEquipment();
             Changed(nameof(RequestItems));
             Changed(nameof(RequestStockSummary));
             if (RequestItem != null)
@@ -303,7 +340,15 @@ namespace MilitarySupply.ViewModels
         public Soldier? IssueSoldier
         {
             get => issueSoldier;
-            set => Set(ref issueSoldier, value);
+            set
+            {
+                // 병사를 바꾸면 구성 중이던 장비는 비운다
+                if (Set(ref issueSoldier, value))
+                {
+                    drafts.Clear();
+                    RefreshEquipment();
+                }
+            }
         }
 
         private StockItem? issueItem;
@@ -391,5 +436,59 @@ namespace MilitarySupply.ViewModels
         public ICommand ReturnCommand { get; }
         public ICommand RequestCommand { get; }
         public ICommand AdvanceCommand { get; }
+
+        // 장비 구성: 장착 위치별로 끌어 놓은 품목 ID (확정 전)
+        private readonly Dictionary<string, string> drafts = [];
+
+        public List<EquipmentSlotViewModel> EquipmentSlots { get; } =
+            EquipmentCatalog.Slots.Select(x => new EquipmentSlotViewModel(x)).ToList();
+
+        public IEnumerable<StockItem> EquipmentItems => service.Data.Items.Where(x => EquipmentCatalog.SlotFor(x) != null).ToList();
+
+        public string LoadoutSummary =>
+            $"구성 중 {EquipmentSlots.Count(x => x.HasDraft)}종  /  확정 대기 {EquipmentSlots.Count(x => x.Active?.AwaitingDelivery == true)}종  /  장착 {EquipmentSlots.Count(x => x.Active is { AwaitingDelivery: false })}종";
+
+        // 병사를 골랐고, 맞는 위치이고, 재고가 있고, 그 위치가 비어 있어야 끌어 놓을 수 있다
+        public bool CanStageItem(StockItem item, string? target) =>
+            IssueSoldier != null
+            && target != null
+            && EquipmentCatalog.SlotFor(item) == target
+            && service.Data.Items.Any(x => x.Id == item.Id && x.Quantity > 0)
+            && !service.Data.Issues.Any(x => x.SoldierId == IssueSoldier.Id
+                                          && x.ReturnedAt == null
+                                          && EquipmentCatalog.SlotFor(service.Data.Items.First(i => i.Id == x.ItemId)) == target);
+
+        public void StageItem(StockItem item, string? target) => Run(() =>
+        {
+            if (!CanStageItem(item, target))
+                throw new InvalidOperationException("병사를 선택하고 재고·장착 위치를 확인하세요. 이미 확정/장착된 위치는 반납 또는 취소 후 교체할 수 있습니다.");
+
+            drafts[target!] = item.Id;
+            RefreshEquipment();
+            Status = $"{item.Name} 구성 중 · 지급 확정 후 반투명 인도 대기 상태가 됩니다.";
+        });
+
+        private void RefreshEquipment()
+        {
+            foreach (var slot in EquipmentSlots)
+            {
+                var draft = drafts.TryGetValue(slot.Key, out var id)
+                    ? service.Data.Items.FirstOrDefault(x => x.Id == id)
+                    : null;
+                var active = service.Data.Issues.FirstOrDefault(x => x.SoldierId == IssueSoldier?.Id
+                                                                  && x.ReturnedAt == null
+                                                                  && EquipmentCatalog.SlotFor(service.Data.Items.First(i => i.Id == x.ItemId)) == slot.Key);
+                slot.Update(draft, active, active == null ? null : ItemLabel(active.ItemId));
+            }
+
+            Changed(nameof(EquipmentItems));
+            Changed(nameof(LoadoutSummary));
+        }
+
+        public ICommand ConfirmLoadoutCommand { get; }
+        public ICommand CompleteDeliveryCommand { get; }
+        public ICommand ClearLoadoutCommand { get; }
+        public ICommand StageItemCommand { get; }
+        public ICommand RemoveDraftCommand { get; }
     }
 }
