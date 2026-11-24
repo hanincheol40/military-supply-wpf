@@ -45,6 +45,22 @@ namespace MilitarySupply.ViewModels
                 Minimum = "10";
                 Required = true;
             });
+
+            // 지급·반납
+            IssueCommand = Command(() => service.Issue(IssueSoldier?.Id ?? "", IssueItem?.Id ?? "", Positive(IssueQuantity), Serial),
+                "장비를 지급하고 재고를 차감했습니다.");
+            ReturnCommand = Command(() => service.Return(SelectedIssue?.Id ?? ""),
+                "장비 반납 / 확정 취소를 처리하고 재고를 복원했습니다.");
+
+            // 보급 요청
+            RequestCommand = Command(() =>
+            {
+                if (RequestItem == null || string.IsNullOrWhiteSpace(Reason))
+                    throw new InvalidOperationException("품목과 요청 사유를 입력하세요.");
+                service.Request(RequestItem.Id, Positive(RequestQuantity), Reason);
+            }, "보급 요청을 등록했습니다.");
+            AdvanceCommand = Command(() => service.Advance(SelectedRequest?.Id ?? ""),
+                "요청을 처리했습니다. 입고 완료 시 재고가 증가합니다.");
         }
 
         // 실행 → 화면 새로 고침 → 아래 상태 글자 바꾸기
@@ -75,12 +91,24 @@ namespace MilitarySupply.ViewModels
                 ? n
                 : throw new InvalidOperationException("수량과 최소재고는 0 이상의 정수로 입력하세요.");
 
+        private static int Positive(string value)
+        {
+            var n = Nonnegative(value);
+            return n > 0 ? n : throw new InvalidOperationException("수량은 1 이상으로 입력하세요.");
+        }
+
         // 데이터가 바뀌면 화면에 묶인 목록과 숫자를 다시 읽게 한다
         public void Refresh()
         {
+            Changed(nameof(RequestItems));
+            Changed(nameof(RequestStockSummary));
+            if (RequestItem != null)
+                RequestItem = service.Data.Items.FirstOrDefault(x => x.Id == RequestItem.Id && (!ShowShortageOnly || x.IsShortage));
+
             foreach (var name in new[]
             {
                 nameof(Soldiers), nameof(Items), nameof(AllSoldiers), nameof(AllItems),
+                nameof(Issues), nameof(Stats), nameof(History),
                 nameof(Requests), nameof(RecentRequests), nameof(Metrics), nameof(LowItems),
                 nameof(Rate), nameof(RateText), nameof(DonutPath),
                 nameof(RequiredCount), nameof(CompleteCount), nameof(IncompleteCount),
@@ -137,6 +165,7 @@ namespace MilitarySupply.ViewModels
             set => Set(ref status, value);
         }
 
+        private string SoldierLabel(string id) => service.Data.Soldiers.First(x => x.Id == id).Display;
         private string ItemLabel(string id) => service.Data.Items.First(x => x.Id == id).Name;
 
         // 대시보드
@@ -268,5 +297,99 @@ namespace MilitarySupply.ViewModels
         public ICommand AddItemCommand { get; }
         public ICommand UpdateItemCommand { get; }
         public ICommand NewItemCommand { get; }
+
+        // 지급·반납
+        private Soldier? issueSoldier;
+        public Soldier? IssueSoldier
+        {
+            get => issueSoldier;
+            set => Set(ref issueSoldier, value);
+        }
+
+        private StockItem? issueItem;
+        public StockItem? IssueItem { get => issueItem; set => Set(ref issueItem, value); }
+
+        private string issueQuantity = "1", serial = "";
+        public string IssueQuantity { get => issueQuantity; set => Set(ref issueQuantity, value); }
+        public string Serial { get => serial; set => Set(ref serial, value); }
+
+        private IssueRow? selectedIssue;
+        public IssueRow? SelectedIssue { get => selectedIssue; set => Set(ref selectedIssue, value); }
+
+        public IEnumerable<IssueRow> Issues => service.Data.Issues
+            .OrderByDescending(x => x.Date)
+            .Select(x => new IssueRow(x.Id, SoldierLabel(x.SoldierId), ItemLabel(x.ItemId), x.Quantity, x.Serial, x.Date, IssueStatus(x)))
+            .ToList();
+
+        private static string IssueStatus(Issue x)
+        {
+            if (x.ReturnedAt != null)
+                return x.AwaitingDelivery ? "확정 취소" : "반납 완료";
+            return x.AwaitingDelivery ? "지급 확정" : "지급 완료";
+        }
+
+        // 보급 요청
+        private RequestRow? selectedRequest;
+        public RequestRow? SelectedRequest { get => selectedRequest; set => Set(ref selectedRequest, value); }
+
+        private StockItem? requestItem;
+        public StockItem? RequestItem
+        {
+            get => requestItem;
+            set
+            {
+                var changedId = requestItem?.Id != value?.Id;
+                if (Set(ref requestItem, value))
+                {
+                    // 품목을 새로 고르면 모자란 만큼을 기본 수량으로
+                    if (changedId && value != null)
+                        RequestQuantity = (value.IsShortage ? value.Shortage : 1).ToString();
+                    Changed(nameof(RequestItemSummary));
+                }
+            }
+        }
+
+        private bool showShortageOnly = true;
+        public bool ShowShortageOnly
+        {
+            get => showShortageOnly;
+            set
+            {
+                if (Set(ref showShortageOnly, value))
+                {
+                    if (value && RequestItem is { IsShortage: false })
+                        RequestItem = null;
+                    Changed(nameof(RequestItems));
+                }
+            }
+        }
+
+        public IEnumerable<StockItem> RequestItems => service.Data.Items
+            .Where(x => !ShowShortageOnly || x.IsShortage)
+            .OrderByDescending(x => x.IsShortage)
+            .ThenByDescending(x => x.Shortage)
+            .ThenBy(x => x.Name)
+            .ToList();
+
+        public string RequestStockSummary =>
+            $"부족 품목 {service.Data.Items.Count(x => x.IsShortage)}종 · 최소재고 도달에 필요한 수량 {service.Data.Items.Sum(x => (long)x.Shortage)}개";
+        public string RequestItemSummary => RequestItem?.SupplySummary ?? "품목을 선택하면 현재 재고와 부족 수량을 확인할 수 있습니다.";
+
+        private string requestQuantity = "10", reason = "";
+        public string RequestQuantity { get => requestQuantity; set => Set(ref requestQuantity, value); }
+        public string Reason { get => reason; set => Set(ref reason, value); }
+
+        // 통계, 변경 이력
+        public IEnumerable<StatRow> Stats => service.Data.Items.Select(i => new StatRow(
+            i.Name, i.Category, i.Quantity,
+            service.Data.Issues.Where(x => x.ItemId == i.Id && x.ReturnedAt == null && !x.AwaitingDelivery).Sum(x => x.Quantity),
+            service.Data.Issues.Where(x => x.ItemId == i.Id && x.ReturnedAt == null && x.AwaitingDelivery).Sum(x => x.Quantity),
+            i.Minimum, i.Status)).ToList();
+        public IEnumerable<AuditEntry> History => service.Data.History.OrderByDescending(x => x.Date).ToList();
+
+        public ICommand IssueCommand { get; }
+        public ICommand ReturnCommand { get; }
+        public ICommand RequestCommand { get; }
+        public ICommand AdvanceCommand { get; }
     }
 }
