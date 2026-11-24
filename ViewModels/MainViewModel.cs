@@ -13,6 +13,38 @@ namespace MilitarySupply.ViewModels
         {
             this.service = service;
             this.dialogs = dialogs;
+
+            // 병사 관리
+            AddSoldierCommand = Command(() => service.SaveSoldier(SoldierForm(), false), "병사를 등록했습니다.");
+            UpdateSoldierCommand = Command(() =>
+            {
+                if (SelectedSoldier == null || SoldierId != SelectedSoldier.Id)
+                    throw new InvalidOperationException("병사를 선택하고 군번은 유지하세요.");
+                service.SaveSoldier(SoldierForm(), true);
+            }, "병사 정보를 수정했습니다.");
+            NewSoldierCommand = new RelayCommand(() =>
+            {
+                SelectedSoldier = null;
+                SoldierId = SoldierName = Unit = "";
+                Rank = "이병";
+            });
+
+            // 재고 관리
+            AddItemCommand = Command(() => service.SaveItem(ItemForm(), false), "품목을 등록했습니다.");
+            UpdateItemCommand = Command(() =>
+            {
+                if (SelectedItem == null || ItemId != SelectedItem.Id)
+                    throw new InvalidOperationException("품목을 선택하고 코드는 유지하세요.");
+                service.SaveItem(ItemForm(), true);
+            }, "재고를 조정했습니다.");
+            NewItemCommand = new RelayCommand(() =>
+            {
+                SelectedItem = null;
+                ItemId = ItemName = Category = "";
+                StockQuantity = "0";
+                Minimum = "10";
+                Required = true;
+            });
         }
 
         // 실행 → 화면 새로 고침 → 아래 상태 글자 바꾸기
@@ -38,11 +70,17 @@ namespace MilitarySupply.ViewModels
             }
         }
 
+        private static int Nonnegative(string value) =>
+            int.TryParse(value, out int n) && n >= 0
+                ? n
+                : throw new InvalidOperationException("수량과 최소재고는 0 이상의 정수로 입력하세요.");
+
         // 데이터가 바뀌면 화면에 묶인 목록과 숫자를 다시 읽게 한다
         public void Refresh()
         {
             foreach (var name in new[]
             {
+                nameof(Soldiers), nameof(Items), nameof(AllSoldiers), nameof(AllItems),
                 nameof(Requests), nameof(RecentRequests), nameof(Metrics), nameof(LowItems),
                 nameof(Rate), nameof(RateText), nameof(DonutPath),
                 nameof(RequiredCount), nameof(CompleteCount), nameof(IncompleteCount),
@@ -143,5 +181,92 @@ namespace MilitarySupply.ViewModels
                 return FormattableString.Invariant($"M 100,17 A 83,83 0 {(Rate > 50 ? 1 : 0)},1 {x},{y}");
             }
         }
+
+        // 병사·재고 목록 (검색어로 거른다)
+        private string search = "";
+        public string Search
+        {
+            get => search;
+            set
+            {
+                if (Set(ref search, value))
+                {
+                    Changed(nameof(Soldiers));
+                    Changed(nameof(Items));
+                }
+            }
+        }
+
+        public IEnumerable<Soldier> Soldiers => service.Data.Soldiers
+            .Where(x => (x.Id + x.Display).Contains(Search, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        public IEnumerable<StockItem> Items => service.Data.Items
+            .Where(x => (x.Id + x.Name + x.Category).Contains(Search, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        // 콤보박스용: 검색과 상관없이 전체 목록
+        public IEnumerable<Soldier> AllSoldiers => service.Data.Soldiers;
+        public IEnumerable<StockItem> AllItems => service.Data.Items;
+
+        // 표에서 고르면 아래 입력 칸에 채워 넣는다
+        private Soldier? selectedSoldier;
+        public Soldier? SelectedSoldier
+        {
+            get => selectedSoldier;
+            set
+            {
+                Set(ref selectedSoldier, value);
+                if (value == null) return;
+
+                SoldierId = value.Id;
+                SoldierName = value.Name;
+                Rank = value.Rank;
+                Unit = value.Unit;
+            }
+        }
+
+        private StockItem? selectedItem;
+        public StockItem? SelectedItem
+        {
+            get => selectedItem;
+            set
+            {
+                Set(ref selectedItem, value);
+                if (value == null) return;
+
+                ItemId = value.Id;
+                ItemName = value.Name;
+                Category = value.Category;
+                StockQuantity = value.Quantity.ToString();
+                Minimum = value.Minimum.ToString();
+                Required = value.Required;
+            }
+        }
+
+        private string soldierId = "", soldierName = "", rank = "이병", unit = "";
+        private string itemId = "", itemName = "", category = "", stockQuantity = "0", minimum = "10";
+        private bool required = true;
+
+        public string SoldierId { get => soldierId; set => Set(ref soldierId, value); }
+        public string SoldierName { get => soldierName; set => Set(ref soldierName, value); }
+        public string Rank { get => rank; set => Set(ref rank, value); }
+        public string Unit { get => unit; set => Set(ref unit, value); }
+
+        public string ItemId { get => itemId; set => Set(ref itemId, value); }
+        public string ItemName { get => itemName; set => Set(ref itemName, value); }
+        public string Category { get => category; set => Set(ref category, value); }
+        public string StockQuantity { get => stockQuantity; set => Set(ref stockQuantity, value); }
+        public string Minimum { get => minimum; set => Set(ref minimum, value); }
+        public bool Required { get => required; set => Set(ref required, value); }
+
+        private Soldier SoldierForm() => new(SoldierId.Trim(), SoldierName.Trim(), Rank.Trim(), Unit.Trim());
+        private StockItem ItemForm() => new(ItemId.Trim(), ItemName.Trim(), Category.Trim(), Nonnegative(StockQuantity), Nonnegative(Minimum), Required);
+
+        public ICommand AddSoldierCommand { get; }
+        public ICommand UpdateSoldierCommand { get; }
+        public ICommand NewSoldierCommand { get; }
+        public ICommand AddItemCommand { get; }
+        public ICommand UpdateItemCommand { get; }
+        public ICommand NewItemCommand { get; }
     }
 }
