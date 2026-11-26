@@ -1,5 +1,7 @@
 using MilitarySupply.Models;
 using MilitarySupply.Services;
+using System.IO.Compression;
+using System.Text.Json;
 using System.IO;
 
 var folder = Path.Combine(args.Length > 0 ? Path.GetFullPath(args[0]) : Path.Combine(Path.GetTempPath(), "MilitarySupplyTests"), Guid.NewGuid().ToString("N"));
@@ -19,7 +21,10 @@ Test("Insufficient stock leaves data and disk unchanged", () => { var before = F
 Test("Return restores stock and prevents double return", () => { var issue = service.Data.Issues.First(); service.Return(issue.Id); Assert(service.Data.Items.Last().Quantity == 5); Reject(() => service.Return(issue.Id)); Assert(service.Data.Items.Last().Quantity == 5); });
 Test("Serial uniqueness and one-unit rule", () => { service.Issue("TEST-01", "TEST-ITEM", 1, "SER-001"); Reject(() => service.Issue("TEST-01", "TEST-ITEM", 1, "ser-001")); Reject(() => service.Issue("TEST-01", "TEST-ITEM", 2, "SER-002")); });
 Test("Supply approval then receipt increases stock once", () => { service.Request("TEST-ITEM", 10, "테스트 보급"); var id = service.Data.Requests.First().Id; var q = service.Data.Items.Last().Quantity; service.Advance(id); Assert(service.Data.Items.Last().Quantity == q); service.Advance(id); Assert(service.Data.Items.Last().Quantity == q + 10); Reject(() => service.Advance(id)); Assert(service.Data.Items.Last().Quantity == q + 10); });
+Test("XLSX roundtrip preserves all records and Korean text", () => { var p = Path.Combine(folder, "roundtrip.xlsx"); WorkbookService.Export(p, service.Data); var read = WorkbookService.Import(p); Assert(JsonSerializer.Serialize(read) == JsonSerializer.Serialize(service.Data)); });
+Test("Reject duplicate and orphan workbook records", () => { var d = SupplyService.Demo(); d.Soldiers.Add(d.Soldiers[0]); Reject(() => SupplyService.Validate(d)); d = SupplyService.Demo(); d.Issues.Add(new("BAD", "MISSING", "EQ-001", 1, "", DateTime.Now, null)); Reject(() => SupplyService.Validate(d)); });
+Test("Import replacement produces backup", () => { var old = File.ReadAllText(dbPath); service.Replace(SupplyService.Demo()); Assert(File.ReadAllText(dbPath + ".bak") == old); Assert(service.Data.Soldiers.Count == 6); });
+Test("Invalid XLSX header rejected", () => { var p = Path.Combine(folder, "bad-header.xlsx"); WorkbookService.Export(p, service.Data); using (var z = ZipFile.Open(p, ZipArchiveMode.Update)) { var e = z.GetEntry("xl/worksheets/sheet1.xml")!; string xml; using (var r = new StreamReader(e.Open())) xml = r.ReadToEnd(); e.Delete(); using var w = new StreamWriter(z.CreateEntry("xl/worksheets/sheet1.xml").Open()); w.Write(xml.Replace("군번", "잘못된열")); } Reject(() => WorkbookService.Import(p)); });
 Test("Corrupt local JSON is preserved", () => { var p = Path.Combine(folder, "corrupt.json"); File.WriteAllText(p, "invalid json"); Reject(() => new SupplyService(p)); Assert(File.ReadAllText(p) == "invalid json"); });
 Test("No soldiers or required items returns zero rate", () => { service.Replace(new SupplyData()); Assert(service.Rate == 0); service.Replace(new SupplyData { Soldiers = [new("A", "가", "이병", "소대")] }); Assert(service.Rate == 0); });
-
-Console.WriteLine($"{passed} tests passed.");
+var templates = Path.Combine(folder, "Templates"); Directory.CreateDirectory(templates); WorkbookService.Export(Path.Combine(templates, "기본양식_빈파일.xlsx"), new()); WorkbookService.Export(Path.Combine(templates, "기본양식_데모.xlsx"), SupplyService.Demo()); Console.WriteLine($"{passed} tests passed. Templates: {templates}");
