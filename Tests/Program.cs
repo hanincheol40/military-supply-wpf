@@ -3,6 +3,7 @@ using MilitarySupply.Services;
 using System.IO.Compression;
 using System.Text.Json;
 using System.IO;
+using MilitarySupply.ViewModels;
 
 var folder = Path.Combine(args.Length > 0 ? Path.GetFullPath(args[0]) : Path.Combine(Path.GetTempPath(), "MilitarySupplyTests"), Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(folder);
@@ -27,4 +28,19 @@ Test("Import replacement produces backup", () => { var old = File.ReadAllText(db
 Test("Invalid XLSX header rejected", () => { var p = Path.Combine(folder, "bad-header.xlsx"); WorkbookService.Export(p, service.Data); using (var z = ZipFile.Open(p, ZipArchiveMode.Update)) { var e = z.GetEntry("xl/worksheets/sheet1.xml")!; string xml; using (var r = new StreamReader(e.Open())) xml = r.ReadToEnd(); e.Delete(); using var w = new StreamWriter(z.CreateEntry("xl/worksheets/sheet1.xml").Open()); w.Write(xml.Replace("군번", "잘못된열")); } Reject(() => WorkbookService.Import(p)); });
 Test("Corrupt local JSON is preserved", () => { var p = Path.Combine(folder, "corrupt.json"); File.WriteAllText(p, "invalid json"); Reject(() => new SupplyService(p)); Assert(File.ReadAllText(p) == "invalid json"); });
 Test("No soldiers or required items returns zero rate", () => { service.Replace(new SupplyData()); Assert(service.Rate == 0); service.Replace(new SupplyData { Soldiers = [new("A", "가", "이병", "소대")] }); Assert(service.Rate == 0); });
-var templates = Path.Combine(folder, "Templates"); Directory.CreateDirectory(templates); WorkbookService.Export(Path.Combine(templates, "기본양식_빈파일.xlsx"), new()); WorkbookService.Export(Path.Combine(templates, "기본양식_데모.xlsx"), SupplyService.Demo()); Console.WriteLine($"{passed} tests passed. Templates: {templates}");
+service.Replace(SupplyService.Demo());
+var dialogs = new FakeDialogs();
+var vm = new MainViewModel(service, dialogs);
+vm.IssueSoldier = service.Data.Soldiers.Last();
+Test("Draft drop is translucent and does not mutate stock", () => { var item = service.Data.Items[0]; vm.StageItem(item, "Head"); Assert(vm.EquipmentSlots[0].HasDraft); Assert(vm.EquipmentSlots[0].Opacity == .30); Assert(service.Data.Items[0].Quantity == item.Quantity); });
+Test("Wrong body slot is rejected", () => { var count = dialogs.Errors; vm.StageItem(service.Data.Items[1], "Head"); Assert(dialogs.Errors == count + 1); Assert(vm.EquipmentSlots[0].Draft!.Id == "EQ-001"); });
+Test("Confirm reserves stock and stays translucent, excluded from rate", () => { var rate = service.Rate; vm.ConfirmLoadoutCommand.Execute(null); Assert(vm.EquipmentSlots[0].Active!.AwaitingDelivery); Assert(vm.EquipmentSlots[0].Opacity == .48); Assert(service.Data.Items[0].Quantity == 133); Assert(service.Rate == rate); Assert(new SupplyService(dbPath).Data.Issues.First().AwaitingDelivery); });
+Test("Confirmed workflow survives XLSX roundtrip", () => { var path = Path.Combine(folder, "confirmed.xlsx"); WorkbookService.Export(path, service.Data); Assert(WorkbookService.Import(path).Issues.First().AwaitingDelivery); });
+Test("Completion equips opaque without second stock deduction", () => { vm.CompleteDeliveryCommand.Execute(null); Assert(vm.EquipmentSlots[0].Opacity == 1); Assert(!vm.EquipmentSlots[0].Active!.AwaitingDelivery); Assert(service.Data.Items[0].Quantity == 133); });
+Test("Existing equipped slot rejects duplicate drag", () => Assert(!vm.CanStageItem(service.Data.Items[0], "Head")));
+Test("Changing soldier clears unconfirmed drafts", () => { vm.StageItem(service.Data.Items[1], "Armor"); Assert(vm.EquipmentSlots[1].HasDraft); vm.IssueSoldier = service.Data.Soldiers.First(); Assert(!vm.EquipmentSlots[1].HasDraft); Assert(vm.EquipmentSlots[1].Opacity == 1); });
+Test("Batch reservation is atomic if later item is unavailable", () => { service.Replace(SupplyService.Demo()); service.SaveItem(service.Data.Items[1] with { Quantity = 0 }, true); var before = File.ReadAllText(dbPath); Reject(() => service.ConfirmLoadout("26-10006", [new("EQ-001", ""), new("EQ-002", "")])); Assert(service.Data.Items[0].Quantity == 134); Assert(File.ReadAllText(dbPath) == before); });
+Test("Duplicate serial across batch rolls back all reservations", () => { service.Replace(SupplyService.Demo()); Reject(() => service.ConfirmLoadout("26-10006", [new("EQ-001", "TESTSER"), new("EQ-002", "testser")])); Assert(service.Data.Items[0].Quantity == 134); Assert(!service.Data.Issues.Any(x => x.AwaitingDelivery)); });
+Test("Cancelling confirmed delivery returns reserved inventory", () => { service.ConfirmLoadout("26-10006", [new("EQ-001", "")]); var id = service.Data.Issues.First().Id; service.Return(id); Assert(service.Data.Items[0].Quantity == 134); Reject(() => service.CompleteDelivery("26-10006")); });
+Test("Rate changes only after delivery completion", () => { service.Replace(SupplyService.Demo()); service.ConfirmLoadout("26-10006", service.Data.Items.Where(x => x.Required).Select(x => new IssueDraft(x.Id, "")).ToList()); Assert(service.Rate < 84); service.CompleteDelivery("26-10006"); Assert(service.Rate == 100); Reject(() => service.CompleteDelivery("26-10006")); });
+var templates = Path.Combine(folder, "Templates"); Directory.CreateDirectory(templates); WorkbookService.Export(Path.Combine(templates, "기본양식_빈파일.xlsx"), new()); WorkbookService.Export(Path.Combine(templates, "기본양식_데모.xlsx"), SupplyService.Demo()); Console.WriteLine($"{passed} tests passed. Templates: {templates}");  sealed class FakeDialogs : IUserDialogs {     public int Errors { get; private set; }     public string? OpenWorkbook() => null;     public string? SaveWorkbook() => null;     public bool ConfirmImport(string path) => false;     public void ShowError(string message) => Errors++; }
