@@ -333,6 +333,65 @@ Test("Manual request amount is retained and replenished item leaves shortage fil
     Assert(requestVm.RequestItem == null);
 });
 
+// ---------- 화면과 글꼴 (WPF) ----------
+
+// 실제 창을 만들어 XAML 리소스가 읽히는지, Paperlogy 4가지 굵기가 모두 들어 있는지 본다.
+// WPF 창은 STA 스레드에서만 만들 수 있어서 따로 스레드를 연다.
+Test("WPF views load and all four bundled Paperlogy weights resolve", () =>
+{
+    Exception? error = null;
+
+    var thread = new Thread(() =>
+    {
+        try
+        {
+            var app = new MilitarySupply.App();
+            app.InitializeComponent();
+            var window = new MilitarySupply.MainWindow();
+
+            Console.WriteLine("Family: " + window.FontFamily.Source);
+            var fontFolder = new Uri("pack://application:,,,/MilitarySupply;component/Assets/Fonts/");
+            foreach (var available in System.Windows.Media.Fonts.GetFontFamilies(fontFolder))
+                Console.WriteLine("Available family: " + available.Source);
+
+            var weights = new[]
+            {
+                System.Windows.FontWeights.Normal,
+                System.Windows.FontWeights.Medium,
+                System.Windows.FontWeights.SemiBold,
+                System.Windows.FontWeights.Bold,
+            };
+
+            foreach (var weight in weights)
+            {
+                // Theme.xaml의 PaperlogyRegular / Medium / SemiBold / Bold 리소스
+                var key = "Paperlogy" + weight.ToString().Replace("Normal", "Regular");
+                var family = (System.Windows.Media.FontFamily)app.FindResource(key);
+                var type = new System.Windows.Media.Typeface(family, System.Windows.FontStyles.Normal, weight, System.Windows.FontStretches.Normal);
+
+                Assert(type.TryGetGlyphTypeface(out var glyph));
+                Console.WriteLine($"Font {weight}: {glyph.FontUri} / {glyph.Weight}");
+                Assert(glyph.FontUri.ToString().Contains("Paperlogy", StringComparison.OrdinalIgnoreCase));
+                Assert(glyph.Weight == weight);
+            }
+
+            window.Close();
+            app.Shutdown();
+        }
+        catch (Exception ex)
+        {
+            error = ex;
+        }
+    });
+
+    thread.SetApartmentState(ApartmentState.STA);
+    thread.Start();
+    thread.Join();
+
+    if (error != null)
+        throw new Exception("WPF resource/font verification failed", error);
+});
+
 // ---------- 끝: XLSX 빈 양식과 데모 양식을 만들어 둔다 ----------
 
 var templates = Path.Combine(folder, "Templates");
